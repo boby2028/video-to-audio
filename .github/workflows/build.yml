@@ -1,0 +1,145 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download ffmpeg (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract -Force
+          $ffmpeg  = (Get-ChildItem -Path ffmpeg-extract -Recurse -Filter "ffmpeg.exe"  | Select-Object -First 1).FullName
+          $ffprobe = (Get-ChildItem -Path ffmpeg-extract -Recurse -Filter "ffprobe.exe" | Select-Object -First 1).FullName
+          Copy-Item $ffmpeg  -Destination "ffmpeg.exe"
+          Copy-Item $ffprobe -Destination "ffprobe.exe"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed --name VideoToAudio `
+            --add-binary "ffmpeg.exe;." `
+            --add-binary "ffprobe.exe;." `
+            --clean main.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoToAudio-Windows
+          path: dist/VideoToAudio.exe
+          if-no-files-found: error
+
+  build-macos-intel:
+    name: macOS Intel (x86_64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download ffmpeg (macOS Intel)
+        run: |
+          set -e
+          curl -sSL -o ffmpeg.zip  "https://evermeet.cx/ffmpeg/getrelease/zip"
+          curl -sSL -o ffprobe.zip "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+          unzip -o ffmpeg.zip
+          unzip -o ffprobe.zip
+          chmod +x ffmpeg ffprobe
+          file ffmpeg ffprobe
+          ./ffmpeg -version | head -1
+          # Verify it's x86_64
+          if ! file ffmpeg | grep -q "x86_64"; then
+            echo "ERROR: ffmpeg is not x86_64"; exit 1
+          fi
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .app
+        run: |
+          pyinstaller --onefile --windowed --name VideoToAudio \
+            --add-binary "ffmpeg:." \
+            --add-binary "ffprobe:." \
+            --osx-bundle-identifier com.example.videotoaudio \
+            --target-arch x86_64 \
+            --clean main.py
+
+      - name: Ad-hoc sign and package
+        run: |
+          codesign --force --deep --sign - dist/VideoToAudio.app
+          cd dist && ditto -c -k --sequesterRsrc --keepParent VideoToAudio.app VideoToAudio-macOS-Intel.zip
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoToAudio-macOS-Intel
+          path: dist/VideoToAudio-macOS-Intel.zip
+          if-no-files-found: error
+
+  build-macos-arm:
+    name: macOS Apple Silicon (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg (macOS ARM via Homebrew)
+        run: |
+          set -e
+          brew install ffmpeg
+          cp "$(which ffmpeg)"  ffmpeg
+          cp "$(which ffprobe)" ffprobe
+          chmod +x ffmpeg ffprobe
+          file ffmpeg ffprobe
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .app
+        run: |
+          pyinstaller --onefile --windowed --name VideoToAudio \
+            --add-binary "ffmpeg:." \
+            --add-binary "ffprobe:." \
+            --osx-bundle-identifier com.example.videotoaudio \
+            --target-arch arm64 \
+            --clean main.py
+
+      - name: Ad-hoc sign and package
+        run: |
+          codesign --force --deep --sign - dist/VideoToAudio.app
+          cd dist && ditto -c -k --sequesterRsrc --keepParent VideoToAudio.app VideoToAudio-macOS-AppleSilicon.zip
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoToAudio-macOS-AppleSilicon
+          path: dist/VideoToAudio-macOS-AppleSilicon.zip
+          if-no-files-found: error
