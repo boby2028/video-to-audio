@@ -6,9 +6,7 @@
 程序分两个 Tab：
 
   ① 下载提取 —— 视频链接 → 音频文件 (MP3/WAV/M4A/AAC/FLAC/OGG/OPUS)
-                支持 1000+ 网站：YouTube、B站、抖音、西瓜、Twitter、
-                TikTok、Vimeo、SoundCloud、Bandcamp、优酷、腾讯视频 等等。
-
+                
   ② 剪辑拼接 —— 把多段音频/视频按顺序拼起来，支持：
                 • 每段设起止时间（只要中间某段）
                 • 每段设循环次数（自动复制 N 遍）
