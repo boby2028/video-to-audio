@@ -6,6 +6,11 @@ import tempfile
 import threading
 import queue
 import json
+import time
+import uuid
+import random
+import http.cookiejar
+import urllib.request
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
@@ -82,6 +87,55 @@ def format_time(sec):
     if h:
         return f"{h:d}:{m:02d}:{s:05.2f}"
     return f"{m:d}:{s:05.2f}"
+
+
+def _gen_fake_buvid3():
+    """B 站 buvid3 格式: UUID 大写 + 5 位时间戳后缀 + 'infoc'"""
+    return str(uuid.uuid4()).upper() + str(int(time.time() * 1000))[-5:] + "infoc"
+
+
+def prepare_bilibili_cookiefile(ua, log=None):
+    """
+    B 站 API (x/player/wbi/playurl) 会检查 buvid3/b_nut 这俩核心 cookie,没有返 412。
+    这里访问 www.bilibili.com 拿真 cookie,网络挂了就伪造 buvid3。
+    ⚠ 不要瞎补 buvid_fp/_uuid —— 格式对不上反而会被当机器人拦。
+    """
+    cj = http.cookiejar.MozillaCookieJar()
+    warmup_ok = False
+    try:
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        opener.addheaders = [("User-Agent", ua)]
+        with opener.open("https://www.bilibili.com/", timeout=10) as r:
+            r.read(512)
+        warmup_ok = any(c.name == "buvid3" for c in cj)
+        if log:
+            names = sorted({c.name for c in cj})
+            log(f"  B 站 cookie 预热: {','.join(names) or '(空)'}")
+    except Exception as e:
+        if log:
+            log(f"  B 站 cookie 预热失败 ({e})，使用伪造 buvid3 兜底")
+
+    if not warmup_ok:
+        # 兜底:只补 buvid3 + b_nut,别的不碰
+        now = int(time.time())
+        expires = now + 3600 * 24 * 365
+        for name, value in [("buvid3", _gen_fake_buvid3()), ("b_nut", str(now))]:
+            if any(c.name == name for c in cj):
+                continue
+            cj.set_cookie(http.cookiejar.Cookie(
+                version=0, name=name, value=value,
+                port=None, port_specified=False,
+                domain=".bilibili.com", domain_specified=True, domain_initial_dot=True,
+                path="/", path_specified=True,
+                secure=False, expires=expires,
+                discard=False, comment=None, comment_url=None,
+                rest={}, rfc2109=False,
+            ))
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_bilibili_cookies.txt", mode="w", encoding="utf-8")
+    tmp.close()
+    cj.save(tmp.name, ignore_discard=True, ignore_expires=True)
+    return tmp.name
 
 
 def probe_duration(ffprobe_path, file):
@@ -233,7 +287,8 @@ class DownloadTab(ttk.Frame):
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/124.0.0.0 Safari/537.36")
         lower = url.lower()
-        if "bilibili." in lower or "b23.tv" in lower:
+        is_bili = "bilibili." in lower or "b23.tv" in lower
+        if is_bili:
             referer = "https://www.bilibili.com/"
         elif "douyin." in lower or "iesdouyin." in lower:
             referer = "https://www.douyin.com/"
@@ -252,6 +307,11 @@ class DownloadTab(ttk.Frame):
         http_headers = {"User-Agent": ua}
         if referer:
             http_headers["Referer"] = referer
+        if is_bili:
+            # B 站 JSON API 对 Accept / Accept-Language / Origin 敏感
+            http_headers["Accept"] = "application/json, text/plain, */*"
+            http_headers["Accept-Language"] = "zh-CN,zh;q=0.9,en;q=0.8"
+            http_headers["Origin"] = "https://www.bilibili.com"
 
         opts = {
             "format": "bestaudio/best",
@@ -265,6 +325,22 @@ class DownloadTab(ttk.Frame):
             "retries": 5,
             "fragment_retries": 5,
         }
+
+        # B 站需要 buvid3 / b_nut 等 cookie,否则 api.bilibili.com 直接 412
+        # 同时 B 站会封代理出口 IP,开 VPN/Clash 时必须强制直连
+        bili_cookiefile = None
+        is_cn_site = is_bili or any(s in lower for s in
+            ("douyin.", "iesdouyin.", "ixigua.", "youku.", "v.qq.com", "weibo."))
+        if is_cn_site:
+            opts["proxy"] = ""  # 关键:绕过系统代理,直连
+            self.logger("  国内站点 → 绕过代理直连")
+        if is_bili:
+            try:
+                bili_cookiefile = prepare_bilibili_cookiefile(ua, log=self.logger)
+                opts["cookiefile"] = bili_cookiefile
+            except Exception as e:
+                self.logger(f"  B 站 cookie 准备异常: {e}")
+
         if self.ffmpeg_path:
             opts["ffmpeg_location"] = self.ffmpeg_path
             opts["postprocessors"] = [{
@@ -272,8 +348,15 @@ class DownloadTab(ttk.Frame):
                 "preferredcodec": fmt,
                 "preferredquality": quality,
             }]
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        finally:
+            if bili_cookiefile and Path(bili_cookiefile).exists():
+                try:
+                    os.unlink(bili_cookiefile)
+                except Exception:
+                    pass
 
     def _hook(self, d):
         status = d.get("status")
@@ -694,7 +777,7 @@ _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("视频音频提取器 v1.2 —— 下载 · 剪辑拼接")
+        self.title("视频音频提取器 v1.3 —— 下载 · 剪辑拼接")
         self.geometry("820x660")
         self.minsize(720, 580)
 
