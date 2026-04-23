@@ -228,6 +228,31 @@ class DownloadTab(ttk.Frame):
 
     def _download(self, url, outdir, fmt, quality, keep_video):
         outtmpl = str(Path(outdir) / "%(title)s.%(ext)s")
+        # 按站点给合适的 Referer / UA，否则 B 站会返回 412，抖音会返回 403
+        ua = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0.0.0 Safari/537.36")
+        lower = url.lower()
+        if "bilibili." in lower or "b23.tv" in lower:
+            referer = "https://www.bilibili.com/"
+        elif "douyin." in lower or "iesdouyin." in lower:
+            referer = "https://www.douyin.com/"
+        elif "ixigua." in lower:
+            referer = "https://www.ixigua.com/"
+        elif "youku." in lower:
+            referer = "https://www.youku.com/"
+        elif "v.qq.com" in lower:
+            referer = "https://v.qq.com/"
+        elif "weibo." in lower:
+            referer = "https://weibo.com/"
+        elif "twitter." in lower or "x.com" in lower:
+            referer = "https://twitter.com/"
+        else:
+            referer = None
+        http_headers = {"User-Agent": ua}
+        if referer:
+            http_headers["Referer"] = referer
+
         opts = {
             "format": "bestaudio/best",
             "outtmpl": outtmpl,
@@ -236,6 +261,9 @@ class DownloadTab(ttk.Frame):
             "noprogress": True,
             "progress_hooks": [self._hook],
             "keepvideo": keep_video,
+            "http_headers": http_headers,
+            "retries": 5,
+            "fragment_retries": 5,
         }
         if self.ffmpeg_path:
             opts["ffmpeg_location"] = self.ffmpeg_path
@@ -666,7 +694,7 @@ _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("视频音频提取器 v1.1 —— 下载 · 剪辑拼接")
+        self.title("视频音频提取器 v1.2 —— 下载 · 剪辑拼接")
         self.geometry("820x660")
         self.minsize(720, 580)
 
