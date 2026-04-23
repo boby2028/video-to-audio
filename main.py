@@ -21,28 +21,36 @@ AUDIO_FORMATS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"]
 QUALITY_OPTIONS = ["320", "256", "192", "128", "96", "64"]
 
 
-def find_ffmpeg():
+def _bundled_base_dirs():
+    """Return candidate dirs to look for bundled binaries (dev + PyInstaller)."""
+    dirs = []
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
+        # PyInstaller --onefile unpacks data/binaries into sys._MEIPASS
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            dirs.append(Path(meipass))
+        # Also check next to the executable (non-onefile layout)
+        dirs.append(Path(sys.executable).parent)
     else:
-        base = Path(__file__).parent
-    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-    local = base / name
-    if local.exists():
-        return str(local)
-    return shutil.which("ffmpeg")
+        dirs.append(Path(__file__).parent)
+    return dirs
+
+
+def _find_tool(name_unix, name_win):
+    name = name_win if os.name == "nt" else name_unix
+    for base in _bundled_base_dirs():
+        p = base / name
+        if p.exists():
+            return str(p)
+    return shutil.which(name_unix)
+
+
+def find_ffmpeg():
+    return _find_tool("ffmpeg", "ffmpeg.exe")
 
 
 def find_ffprobe():
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent
-    name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
-    local = base / name
-    if local.exists():
-        return str(local)
-    return shutil.which("ffprobe")
+    return _find_tool("ffprobe", "ffprobe.exe")
 
 
 def parse_time(s):
